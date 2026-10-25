@@ -2,6 +2,7 @@
 
 Monthly game day organizer: automatic date poll, invitations, volunteer sign-ups, and an organizer summary.
 
+
 **Stack:** static site on GitHub Pages, Supabase (Postgres + Auth) for data, a daily GitHub Actions job for scheduling and Gmail sending.
 
 ## Status
