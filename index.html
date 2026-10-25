@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game Night</title>
+<style>
+:root{--bg:#faf8f5;--card:#fff;--ink:#1f2328;--muted:#656d76;--line:#d8d4cc;--accent:#2f6f5e;--on-accent:#fff;--bad:#b3261e;--ok:#1f6b3a;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--bg:#16181a;--card:#1f2224;--ink:#ecebe8;--muted:#9aa0a6;--line:#363a3d;--accent:#5fb89f;--on-accent:#0d1b16;--bad:#f2867f;--ok:#7fd49b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:34rem;margin:0 auto;padding:1.5rem 1rem 3rem}
+h1{font-size:1.6rem;margin:.5rem 0}h2{font-size:1.15rem;margin:1.5rem 0 .5rem}
+.sub{color:var(--muted)}
+.card,fieldset{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem;margin:.6rem 0}
+legend{font-weight:600;padding:0 .3rem}
+.opt{display:inline-flex;align-items:center;gap:.4rem;margin-right:1.5rem;min-height:2.75rem}
+.opt input{width:1.2rem;height:1.2rem;accent-color:var(--accent)}
+button,select,input[type=text]{font:inherit;color:inherit}
+.primary{background:var(--accent);color:var(--on-accent);border:0;border-radius:8px;padding:.7rem 1.2rem;min-height:2.75rem;cursor:pointer;font-weight:600}
+.primary:disabled{opacity:.45;cursor:not-allowed}
+.link{background:none;border:0;color:var(--muted);text-decoration:underline;cursor:pointer;padding:.5rem 0}
+.note{padding:.7rem 1rem;border-radius:8px;border:1px solid var(--line);background:var(--card)}
+.note.bad{color:var(--bad);border-color:var(--bad)}.note.ok{color:var(--ok);border-color:var(--ok)}
+.list{list-style:none;padding:0;margin:0}.list li{padding:.4rem 0;border-bottom:1px solid var(--line)}
+.tag{display:inline-block;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:.1rem .6rem;margin:.1rem .3rem .1rem 0}
+.x{background:none;border:0;cursor:pointer;color:var(--muted);font-size:1.1rem;padding:0 .2rem}
+.form{display:grid;gap:.5rem}
+select,input[type=text]{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.6rem;min-height:2.75rem;width:100%}
+</style>
+</head>
+<body>
+<main id="app"><p class="sub">Loading…</p></main>
+<script src="config.js"></script>
+<script>
+const C = window.GNM_CONFIG || {};
+const token = new URLSearchParams(location.search).get('t');
+const app = document.getElementById('app');
+
+// Tiny DOM helper. Text is always added as text, never as HTML.
+function h(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) e.append(c);
+  return e;
+}
+
+async function rpc(fn, args) {
+  const headers = { 'Content-Type': 'application/json', apikey: C.SUPABASE_KEY };
+  if (C.SUPABASE_KEY.startsWith('eyJ')) headers.Authorization = 'Bearer ' + C.SUPABASE_KEY;
+  const r = await fetch(`${C.SUPABASE_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers, body: JSON.stringify(args) });
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch {}
+  if (!r.ok) throw new Error((data && data.message) || 'request_failed');
+  return data;
+}
+
+const MSG = {
+  invalid_link: 'This link isn’t valid. Ask the organizer for a new one.',
+  poll_closed: 'Voting has closed for this month.',
+  incomplete_ballot: 'Please answer yes or no for every date.',
+  host_taken: 'Someone has already signed up to host.',
+  not_invited: 'You aren’t on the invitation list for this game day.',
+  not_scheduled: 'The date hasn’t been set yet.',
+  not_found: 'That entry wasn’t found.'
+};
+const msg = e => MSG[e.message] || 'Something went wrong. Please try again.';
+const note = (text, cls = '') => h('p', { class: 'note ' + cls, role: 'status' }, text);
+
+const ymd = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const fmtDate = s => ymd(s).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+const fmtMonth = s => ymd(s).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+const fmtTime = t => { if (!t) return ''; const [H, M] = t.split(':').map(Number); return new Date(2000, 0, 1, H, M).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); };
+
+const shell = (...kids) => app.replaceChildren(...kids);
+const greet = x => h('h1', {}, `Hi, ${x.attendee.name}`);
+
+async function load() {
+  if (!C.SUPABASE_URL || !C.SUPABASE_KEY) return shell(h('h1', {}, 'Game Night'), note('This site isn’t configured yet.', 'bad'));
+  if (!token) return shell(h('h1', {}, 'Game Night'), note(MSG.invalid_link, 'bad'));
+  try {
+    const poll = await rpc('get_poll', { p_token: token });
+    if (!poll.event) return shell(greet(poll), note('There’s nothing to vote on right now. Check back soon.'));
+    if (poll.event.status === 'polling') return renderVote(poll);
+    return renderBoard(await rpc('get_event_board', { p_token: token }));
+  } catch (e) {
+    shell(h('h1', {}, 'Game Night'), note(msg(e), 'bad'));
+  }
+}
+
+function renderVote(poll) {
+  const ans = {};
+  poll.options.forEach(o => { if (o.available !== null) ans[o.id] = o.available; });
+  const out = h('div');
+  const btn = h('button', { type: 'button', class: 'primary' }, poll.has_submitted ? 'Update my answers' : 'Submit my answers');
+  const sync = () => { btn.disabled = poll.options.some(o => !(o.id in ans)); };
+  const rows = poll.options.map(o => h('fieldset', {},
+    h('legend', {}, fmtDate(o.date)),
+    [['Yes', true], ['No', false]].map(([label, val]) => h('label', { class: 'opt' },
+      h('input', { type: 'radio', name: 'o' + o.id, checked: ans[o.id] === val, onchange: () => { ans[o.id] = val; sync(); } }),
+      label))));
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      await rpc('submit_ballot', { p_token: token, p_answers: ans });
+      out.replaceChildren(note('Saved. You can change your answers until the date is chosen.', 'ok'));
+      btn.textContent = 'Update my answers';
+    } catch (e) { out.replaceChildren(note(msg(e), 'bad')); }
+    sync();
+  });
+  shell(greet(poll),
+    h('p', { class: 'sub' }, `Which Saturdays in ${fmtMonth(poll.event.month)} work for you? Please answer every date.`),
+    ...rows, btn, out);
+  sync();
+}
+
+function renderBoard(b) {
+  const ev = b.event, st = b.invitation_status, out = h('div');
+  const run = async (fn, args) => {
+    try { await rpc(fn, args); await load(); }
+    catch (e) { out.replaceChildren(note(msg(e), 'bad')); }
+  };
+  if (!ev) return shell(greet(b), note('The date hasn’t been set yet.'));
+  const items = [greet(b), h('div', { class: 'card' },
+    h('h2', { style: 'margin-top:0' }, fmtDate(ev.chosen_date)),
+    h('p', {}, [fmtTime(ev.start_time), ev.location].filter(Boolean).join(' · ')),
+    ev.notes && h('p', { class: 'sub' }, ev.notes))];
+
+  if (st === null) return shell(...items, note('The date chosen didn’t work for you, so you weren’t included. If that’s changed, let the organizer know.'));
+  if (st === 'declined') return shell(...items, note('You’ve told us you can’t make it.'),
+    h('p', {}, h('button', { class: 'primary', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'invited' }) }, 'Actually, I can come')), out);
+
+  const ROLES = { host: 'Host', food: 'Food', beverage: 'Beverages', game: 'Games' };
+  const list = h('ul', { class: 'list' });
+  for (const [r, label] of Object.entries(ROLES)) {
+    const taken = b.signups.filter(s => s.role === r);
+    list.append(h('li', {}, h('strong', {}, label + ': '),
+      taken.length ? taken.map(s => h('span', { class: 'tag' },
+        s.name + (s.details ? ' (' + s.details + ')' : ''),
+        s.mine && h('button', { class: 'x', type: 'button', 'aria-label': 'Remove my sign-up', onclick: () => run('remove_signup', { p_token: token, p_signup_id: s.id }) }, '×')))
+        : h('span', { class: 'sub' }, 'Still needed')));
+  }
+  const sel = h('select', { id: 'role' }, Object.entries(ROLES).map(([r, l]) => h('option', { value: r }, l)));
+  const det = h('input', { type: 'text', id: 'details', maxlength: 200, placeholder: 'Details, e.g. chips and salsa' });
+  shell(...items, h('h2', {}, 'Who’s bringing what'), list,
+    h('h2', {}, 'Sign up'),
+    h('div', { class: 'form' },
+      h('label', { for: 'role' }, 'I can bring'), sel, det,
+      h('button', { class: 'primary', type: 'button', onclick: () => run('add_signup', { p_token: token, p_role: sel.value, p_details: det.value }) }, 'Add')),
+    out,
+    h('p', {}, h('button', { class: 'link', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'declined' }) }, 'I can’t make it')));
+}
+
+load();
+</script>
+</body>
+</html>
