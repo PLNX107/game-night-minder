@@ -26,6 +26,9 @@ button,select,input[type=text]{font:inherit;color:inherit}
 .tag{display:inline-block;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:.1rem .6rem;margin:.1rem .3rem .1rem 0}
 .x{background:none;border:0;cursor:pointer;color:var(--muted);font-size:1.1rem;padding:0 .2rem}
 .form{display:grid;gap:.5rem}
+.grid{width:100%;border-collapse:collapse;font-size:.95rem}.grid th,.grid td{padding:.3rem .4rem;border-bottom:1px solid var(--line);text-align:center}.grid th:first-child,.grid td:first-child{text-align:left}
+.post{padding:.5rem 0;border-bottom:1px solid var(--line)}.post .body{white-space:pre-wrap}
+textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.6rem;font:inherit;color:inherit}
 select,input[type=text]{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.6rem;min-height:2.75rem;width:100%}
 </style>
 </head>
@@ -67,7 +70,9 @@ const MSG = {
   host_taken: 'Someone has already signed up to host.',
   not_invited: 'You aren’t on the invitation list for this game day.',
   not_scheduled: 'The date hasn’t been set yet.',
-  not_found: 'That entry wasn’t found.'
+  not_found: 'That entry wasn’t found.',
+  address_required: 'Please enter the address where you’ll host.',
+  too_many_posts: 'You’re posting a lot, so please wait a bit before posting again.'
 };
 const msg = e => MSG[e.message] || 'Something went wrong. Please try again.';
 const note = (text, cls = '') => h('p', { class: 'note ' + cls, role: 'status' }, text);
@@ -93,6 +98,41 @@ async function load() {
   }
 }
 
+const VOTE_MARK = (p, o) => !p.responded ? '–' : (p.answers && p.answers[o.id] ? '✓' : '✗');
+function votesGrid(d) {
+  const t = h('table', { class: 'grid' }, h('tr', {}, h('th', {}, 'Who'), d.options.map(o => h('th', {}, ymd(o.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })))));
+  d.people.forEach(p => t.append(h('tr', {}, h('td', {}, p.name), d.options.map(o => h('td', {}, VOTE_MARK(p, o))))));
+  const waiting = d.people.filter(p => !p.responded).map(p => p.name);
+  return h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Everyone’s votes'), t,
+    h('p', { class: 'sub' }, '✓ yes · ✗ no · – not yet voted' + (waiting.length ? '. Waiting on: ' + waiting.join(', ') : '')));
+}
+
+function peopleSection(people) {
+  const line = (t, a) => h('p', {}, h('strong', {}, t + ': '), a.length ? a.join(', ') : 'no one');
+  const names = f => people.filter(f).map(p => p.name);
+  return h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Who’s coming'),
+    line('Coming', names(p => p.invitation === 'yes')),
+    line('Haven’t replied', names(p => p.invitation === 'pending')),
+    line('Not coming', names(p => p.invitation === 'declined' || (!p.invitation && p.responded))));
+}
+
+function postsSection(initial) {
+  const wrap = h('div', { class: 'card' });
+  const draw = (posts, err) => {
+    const box = h('textarea', { rows: 3, maxlength: 1000, placeholder: 'Ask a question or share an update…', 'aria-label': 'New message' });
+    const refresh = async fn => { try { await fn(); draw(await rpc('get_posts', { p_token: token })); } catch (e) { draw(posts, msg(e)); } };
+    wrap.replaceChildren(h('h2', { style: 'margin-top:0' }, 'Message board'),
+      posts.length ? posts.map(p => h('div', { class: 'post' }, h('strong', {}, p.name), ' ',
+        h('span', { class: 'sub' }, new Date(p.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })),
+        p.mine && h('button', { class: 'x', type: 'button', 'aria-label': 'Delete my message', onclick: () => refresh(() => rpc('delete_post', { p_token: token, p_post_id: p.id })) }, '×'),
+        h('div', { class: 'body' }, p.body))) : h('p', { class: 'sub' }, 'No messages yet. Be the first!'),
+      box, err && note(err, 'bad'),
+      h('p', {}, h('button', { class: 'primary', type: 'button', onclick: () => { if (box.value.trim()) refresh(() => rpc('add_post', { p_token: token, p_body: box.value })); } }, 'Post')));
+  };
+  draw(initial);
+  return wrap;
+}
+
 function renderVote(poll) {
   const ans = {};
   poll.options.forEach(o => { if (o.available !== null) ans[o.id] = o.available; });
@@ -115,7 +155,7 @@ function renderVote(poll) {
   });
   shell(greet(poll),
     h('p', { class: 'sub' }, `Which Saturdays in ${fmtMonth(poll.event.month)} work for you? Please answer every date.`),
-    ...rows, btn, out);
+    ...rows, btn, out, votesGrid(poll), postsSection(poll.posts));
   sync();
 }
 
@@ -129,11 +169,14 @@ function renderBoard(b) {
   const items = [greet(b), h('div', { class: 'card' },
     h('h2', { style: 'margin-top:0' }, fmtDate(ev.chosen_date)),
     h('p', {}, [fmtTime(ev.start_time), ev.location].filter(Boolean).join(' · ')),
-    ev.notes && h('p', { class: 'sub' }, ev.notes))];
+    ev.notes && h('p', { class: 'sub' }, ev.notes),
+    st === 'pending' && h('p', { class: 'sub' }, 'The address is shared with guests who reply yes.'),
+    st === 'yes' && !ev.location && h('p', { class: 'sub' }, 'The address will appear here once a host signs up.'))];
+  const tail = [peopleSection(b.people), h('details', {}, h('summary', {}, 'See everyone’s votes'), votesGrid(b)), postsSection(b.posts)];
 
-  if (st === null) return shell(...items, note('The date chosen didn’t work for you, so you weren’t included. If that’s changed, let the organizer know.'));
+  if (st === null) return shell(...items, note('The date chosen didn’t work for you, so you weren’t included. If that’s changed, let the organizer know.'), ...tail);
   if (st === 'declined') return shell(...items, note('You’ve told us you can’t make it.'),
-    h('p', {}, h('button', { class: 'primary', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'invited' }) }, 'Actually, I can come')), out);
+    h('p', {}, h('button', { class: 'primary', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'yes' }) }, 'Actually, I can come')), out, ...tail);
 
   const ROLES = { host: 'Host', food: 'Food', beverage: 'Beverages', game: 'Games' };
   const list = h('ul', { class: 'list' });
@@ -147,13 +190,19 @@ function renderBoard(b) {
   }
   const sel = h('select', { id: 'role' }, Object.entries(ROLES).map(([r, l]) => h('option', { value: r }, l)));
   const det = h('input', { type: 'text', id: 'details', maxlength: 200, placeholder: 'Details, e.g. chips and salsa' });
-  shell(...items, h('h2', {}, 'Who’s bringing what'), list,
+  const addr = h('input', { type: 'text', id: 'addr', maxlength: 200, placeholder: 'Your address (only guests who reply yes will see it)', style: 'display:none' });
+  sel.addEventListener('change', () => { addr.style.display = sel.value === 'host' ? '' : 'none'; });
+  const rsvp = st === 'pending' ? h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Are you coming?'),
+    h('p', { class: 'sub' }, 'Signing up for something below counts as a yes.'),
+    h('button', { class: 'primary', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'yes' }) }, 'Yes, I’m in'), ' ',
+    h('button', { type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'declined' }) }, 'I can’t make it')) : null;
+  shell(...items, rsvp, h('h2', {}, 'Who’s bringing what'), list,
     h('h2', {}, 'Sign up'),
     h('div', { class: 'form' },
-      h('label', { for: 'role' }, 'I can bring'), sel, det,
-      h('button', { class: 'primary', type: 'button', onclick: () => run('add_signup', { p_token: token, p_role: sel.value, p_details: det.value }) }, 'Add')),
+      h('label', { for: 'role' }, 'I can bring'), sel, det, addr,
+      h('button', { class: 'primary', type: 'button', onclick: () => run('add_signup', { p_token: token, p_role: sel.value, p_details: det.value, p_address: addr.value }) }, 'Add')),
     out,
-    h('p', {}, h('button', { class: 'link', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'declined' }) }, 'I can’t make it')));
+    st === 'yes' && h('p', {}, h('button', { class: 'link', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'declined' }) }, 'I can’t make it')), ...tail);
 }
 
 load();

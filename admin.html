@@ -101,7 +101,7 @@ async function render(msgNode) {
       const q = `event_id=eq.${ev.id}`;
       const [p, r, i, s] = await Promise.all([
         rest(`poll_progress?select=*&${q}`), rest(`poll_results?select=*&${q}&order=option_date`),
-        rest(`invitations?select=status,attendees(name)&${q}`), rest(`signups?select=role,details,attendees(name)&${q}&order=created_at`)]);
+        rest(`invitations?select=status,attendees(name)&${q}`), rest(`signups?select=role,details,address,attendees(name)&${q}&order=created_at`)]);
       extra = { progress: p[0], results: r, invites: i, signups: s };
     }
     app.replaceChildren(
@@ -143,10 +143,13 @@ function eventSection(ev, x, settings) {
     sec.append(h('h2', { style: 'margin-top:1rem' }, 'Details'), h('div', { class: 'row' }, st, loc, nt),
       h('button', { type: 'button', onclick: () => act(() => rest(`events?id=eq.${ev.id}`, { method: 'PATCH', body: { start_time: st.value || null, location: loc.value || null, notes: nt.value || null } }), 'Details saved.') }, 'Save details'));
     const inv = x.invites, nm = s => s.attendees ? s.attendees.name : '?';
-    sec.append(h('h2', { style: 'margin-top:1rem' }, 'Invited and volunteers'),
-      h('p', {}, `Coming: ${inv.filter(i => i.status === 'invited').map(nm).join(', ') || 'none yet'}`),
+    sec.append(h('p', {}, ev.invites_sent_at ? 'Invitations marked as sent, so guests who replied yes can see the address. ' : 'Invitations not marked as sent, so the address is hidden from guests. ',
+        ev.invites_sent_at ? null : h('button', { class: 'primary', type: 'button', onclick: () => act(() => rpc('admin_mark_invites_sent', { p_event_id: ev.id }), 'Marked as sent.') }, 'Mark invitations as sent')),
+      h('h2', { style: 'margin-top:1rem' }, 'Invited and volunteers'),
+      h('p', {}, `Coming: ${inv.filter(i => i.status === 'yes').map(nm).join(', ') || 'none yet'}`),
+      h('p', {}, `Haven’t replied: ${inv.filter(i => i.status === 'pending').map(nm).join(', ') || 'no one'}`),
       h('p', {}, `Can’t make it: ${inv.filter(i => i.status === 'declined').map(nm).join(', ') || 'no one'}`),
-      h('p', {}, x.signups.length ? x.signups.map(s => `${s.role}: ${nm(s)}${s.details ? ' (' + s.details + ')' : ''}`).join(' · ') : 'No volunteers yet.'));
+      h('p', {}, x.signups.length ? x.signups.map(s => `${s.role}: ${nm(s)}${s.details ? ' (' + s.details + ')' : ''}${s.address ? ' @ ' + s.address : ''}`).join(' · ') : 'No volunteers yet.'));
   }
   sec.append(h('p', {}, h('button', { class: 'danger', type: 'button', onclick: () => { if (confirm('Cancel this month’s event? The poll and its data stay in the database.')) act(() => rest(`events?id=eq.${ev.id}`, { method: 'PATCH', body: { status: 'cancelled' } }), 'Event cancelled.'); } }, 'Cancel this event')));
   return sec;
