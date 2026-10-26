@@ -82,7 +82,8 @@ const fmtDate = s => ymd(s).toLocaleDateString(undefined, { weekday: 'long', mon
 const fmtMonth = s => ymd(s).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 const fmtTime = t => { if (!t) return ''; const [H, M] = t.split(':').map(Number); return new Date(2000, 0, 1, H, M).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); };
 
-const shell = (...kids) => app.replaceChildren(...kids);
+const fill = (el, ...kids) => el.replaceChildren(...kids.flat().filter(c => c != null && c !== false));
+const shell = (...kids) => fill(app, ...kids);
 const greet = x => h('h1', {}, `Hi, ${x.attendee.name}`);
 
 async function load() {
@@ -121,13 +122,45 @@ function postsSection(initial) {
   const draw = (posts, err) => {
     const box = h('textarea', { rows: 3, maxlength: 1000, placeholder: 'Ask a question or share an update…', 'aria-label': 'New message' });
     const refresh = async fn => { try { await fn(); draw(await rpc('get_posts', { p_token: token })); } catch (e) { draw(posts, msg(e)); } };
-    wrap.replaceChildren(h('h2', { style: 'margin-top:0' }, 'Message board'),
+    fill(wrap, h('h2', { style: 'margin-top:0' }, 'Message board'),
       posts.length ? posts.map(p => h('div', { class: 'post' }, h('strong', {}, p.name), ' ',
         h('span', { class: 'sub' }, new Date(p.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })),
         p.mine && h('button', { class: 'x', type: 'button', 'aria-label': 'Delete my message', onclick: () => refresh(() => rpc('delete_post', { p_token: token, p_post_id: p.id })) }, '×'),
         h('div', { class: 'body' }, p.body))) : h('p', { class: 'sub' }, 'No messages yet. Be the first!'),
       box, err && note(err, 'bad'),
       h('p', {}, h('button', { class: 'primary', type: 'button', onclick: () => { if (box.value.trim()) refresh(() => rpc('add_post', { p_token: token, p_body: box.value })); } }, 'Post')));
+  };
+  draw(initial);
+  return wrap;
+}
+
+const ROLES = { host: 'Host', food: 'Food', beverage: 'Beverages', game: 'Games' };
+function volunteerSection(initial, full) {
+  const wrap = h('div', { class: 'card' });
+  const draw = (signups, err) => {
+    const act = async fn => {
+      try { await fn(); if (full) await load(); else draw(await rpc('get_signups', { p_token: token })); }
+      catch (e) { draw(signups, msg(e)); }
+    };
+    const list = h('ul', { class: 'list' });
+    for (const [r, label] of Object.entries(ROLES)) {
+      const taken = signups.filter(s => s.role === r);
+      list.append(h('li', {}, h('strong', {}, label + ': '),
+        taken.length ? taken.map(s => h('span', { class: 'tag' },
+          s.name + (s.details ? ' (' + s.details + ')' : ''),
+          s.mine && h('button', { class: 'x', type: 'button', 'aria-label': 'Remove my sign-up', onclick: () => act(() => rpc('remove_signup', { p_token: token, p_signup_id: s.id })) }, '×')))
+          : h('span', { class: 'sub' }, 'Still needed')));
+    }
+    const sel = h('select', { id: 'role' }, Object.entries(ROLES).map(([r, l]) => h('option', { value: r }, l)));
+    const det = h('input', { type: 'text', id: 'details', maxlength: 200, placeholder: 'Details, e.g. chips and salsa' });
+    const addr = h('input', { type: 'text', id: 'addr', maxlength: 200, placeholder: 'Your address (only guests who reply yes will see it)', style: 'display:none' });
+    sel.addEventListener('change', () => { addr.style.display = sel.value === 'host' ? '' : 'none'; });
+    fill(wrap, h('h2', { style: 'margin-top:0' }, 'Who’s bringing what'),
+      !full && h('p', { class: 'sub' }, 'Offers are welcome now. If the date that gets chosen doesn’t work for you, your offer is removed.'),
+      list, h('h2', {}, 'Volunteer'),
+      h('div', { class: 'form' }, h('label', { for: 'role' }, 'I can bring'), sel, det, addr,
+        h('button', { class: 'primary', type: 'button', onclick: () => act(() => rpc('add_signup', { p_token: token, p_role: sel.value, p_details: det.value, p_address: addr.value })) }, 'Add')),
+      err && note(err, 'bad'));
   };
   draw(initial);
   return wrap;
@@ -155,7 +188,7 @@ function renderVote(poll) {
   });
   shell(greet(poll),
     h('p', { class: 'sub' }, `Which Saturdays in ${fmtMonth(poll.event.month)} work for you? Please answer every date.`),
-    ...rows, btn, out, votesGrid(poll), postsSection(poll.posts));
+    ...rows, btn, out, votesGrid(poll), volunteerSection(poll.signups, false), postsSection(poll.posts));
   sync();
 }
 
@@ -178,31 +211,13 @@ function renderBoard(b) {
   if (st === 'declined') return shell(...items, note('You’ve told us you can’t make it.'),
     h('p', {}, h('button', { class: 'primary', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'yes' }) }, 'Actually, I can come')), out, ...tail);
 
-  const ROLES = { host: 'Host', food: 'Food', beverage: 'Beverages', game: 'Games' };
-  const list = h('ul', { class: 'list' });
-  for (const [r, label] of Object.entries(ROLES)) {
-    const taken = b.signups.filter(s => s.role === r);
-    list.append(h('li', {}, h('strong', {}, label + ': '),
-      taken.length ? taken.map(s => h('span', { class: 'tag' },
-        s.name + (s.details ? ' (' + s.details + ')' : ''),
-        s.mine && h('button', { class: 'x', type: 'button', 'aria-label': 'Remove my sign-up', onclick: () => run('remove_signup', { p_token: token, p_signup_id: s.id }) }, '×')))
-        : h('span', { class: 'sub' }, 'Still needed')));
-  }
-  const sel = h('select', { id: 'role' }, Object.entries(ROLES).map(([r, l]) => h('option', { value: r }, l)));
-  const det = h('input', { type: 'text', id: 'details', maxlength: 200, placeholder: 'Details, e.g. chips and salsa' });
-  const addr = h('input', { type: 'text', id: 'addr', maxlength: 200, placeholder: 'Your address (only guests who reply yes will see it)', style: 'display:none' });
-  sel.addEventListener('change', () => { addr.style.display = sel.value === 'host' ? '' : 'none'; });
   const rsvp = st === 'pending' ? h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Are you coming?'),
-    h('p', { class: 'sub' }, 'Signing up for something below counts as a yes.'),
+    h('p', { class: 'sub' }, 'Volunteering for something below counts as a yes.'),
     h('button', { class: 'primary', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'yes' }) }, 'Yes, I’m in'), ' ',
     h('button', { type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'declined' }) }, 'I can’t make it')) : null;
-  shell(...items, rsvp, h('h2', {}, 'Who’s bringing what'), list,
-    h('h2', {}, 'Sign up'),
-    h('div', { class: 'form' },
-      h('label', { for: 'role' }, 'I can bring'), sel, det, addr,
-      h('button', { class: 'primary', type: 'button', onclick: () => run('add_signup', { p_token: token, p_role: sel.value, p_details: det.value, p_address: addr.value }) }, 'Add')),
-    out,
-    st === 'yes' && h('p', {}, h('button', { class: 'link', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'declined' }) }, 'I can’t make it')), ...tail);
+  shell(...items, rsvp, volunteerSection(b.signups, true), out,
+    st === 'yes' && h('p', {}, h('button', { class: 'link', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'declined' }) }, 'I can’t make it')),
+    ...tail);
 }
 
 load();
