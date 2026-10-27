@@ -9,7 +9,7 @@ Monthly game day organizer: automatic date poll, invitations, volunteer sign-ups
 - [x] Database schema, security rules, and scheduling logic (`supabase/migrations/`)
 - [ ] Vote and volunteer pages
 - [ ] Admin page
-- [ ] Scheduled job and email templates
+- [x] Scheduled job and email templates (`jobs/run.mjs`, `.github/workflows/game-night.yml`)
 
 ## Database setup
 
@@ -38,3 +38,28 @@ See `.env.example`. Never commit real values.
 - **Email rules (for the scheduled job):** (1) invitation to yes and pending guests, no address; (2) reminder to pending guests after `invite_reminder_days`, with an event summary and no address; (3) summary with the address to each yes guest once a host address exists, sent once per guest, including guests who reply yes later.
 - **Attendees** have no accounts. Each has a private link containing a token, and all public access goes through token-checked database functions.
 - **The organizer** logs in on the admin page. Only users listed in the `admins` table have access.
+
+## The scheduled job
+
+Runs every 3 hours from GitHub Actions and is safe to repeat. Each run does whatever is due:
+
+1. **Last Sunday of the month, after 9 AM Eastern:** creates next month's poll (every Saturday) and emails everyone their personal link.
+2. **When the voting window closes** (7 days later by default): if more than half have voted, locks in the winning date and sends invitations to yes and pending guests (no address). Otherwise it reminds non-voters, alerts you once, and keeps checking.
+3. **After invitations:** pending guests get one reminder after `invite_reminder_days` (default 3), with an event summary and no address.
+4. **Once a host has entered an address:** each guest who said yes gets the summary with the address, once. Guests who reply yes later get the same email on the next run.
+5. **You get a summary** when something changes (replies, volunteers), at most every 12 hours.
+
+Every email is recorded in the `email_log` table. A failed address is retried up to 3 times.
+
+### Setup
+
+1. In your Google account, create an **app password** (Security > 2-Step Verification > App passwords).
+2. In the repo, go to Settings > Secrets and variables > Actions, and add **secrets**: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `ORGANIZER_EMAIL`, `SITE_URL` (your Pages address, for example `https://YOURNAME.github.io/game-night-minder/`).
+3. Test first: Actions tab > "Game Night job" > Run workflow with dry run set to `true`. It logs what it would do and sends nothing.
+4. To go live, add a repository **variable** (not a secret) named `DRY_RUN` with the value `false`. Until it exists, scheduled runs stay in dry-run mode.
+
+### Notes
+
+- Dates and the "last Sunday" rule use Eastern time. Set a `TIMEZONE` environment variable in the workflow to change it.
+- GitHub turns off scheduled workflows in a public repository after 60 days with no repository activity. If the repo goes quiet, make a small commit now and then, and check the Actions tab if emails stop.
+- If you set a default address in the admin settings, guests who say yes receive it right away, even if a host signs up later with a different address.
