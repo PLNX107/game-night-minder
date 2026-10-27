@@ -96,13 +96,14 @@ async function render(msgNode) {
       rest('app_settings?select=*&id=eq.1'),
       rest('events?select=*&status=neq.cancelled&order=month.desc&limit=1')]);
     const ev = events[0] || null;
-    let extra = { progress: null, results: [], invites: [], signups: [] };
+    let extra = { progress: null, results: [], invites: [], signups: [], ballots: [] };
     if (ev) {
       const q = `event_id=eq.${ev.id}`;
-      const [p, r, i, s] = await Promise.all([
+      const [p, r, i, s, bl] = await Promise.all([
         rest(`poll_progress?select=*&${q}`), rest(`poll_results?select=*&${q}&order=option_date`),
-        rest(`invitations?select=status,attendees(name)&${q}`), rest(`signups?select=role,details,address,attendees(name)&${q}&order=created_at`)]);
-      extra = { progress: p[0], results: r, invites: i, signups: s };
+        rest(`invitations?select=status,attendee_id,attendees(name)&${q}`), rest(`signups?select=role,details,address,attendees(name)&${q}&order=created_at`),
+        rest(`ballots?select=attendee_id,attendees(name)&${q}`)]);
+      extra = { progress: p[0], results: r, invites: i, signups: s, ballots: bl };
     }
     app.replaceChildren(
       h('div', { class: 'row' }, h('h1', { style: 'flex:1' }, 'Game Night Admin'), h('button', { type: 'button', onclick: () => { jwt = null; try { sessionStorage.removeItem('gnm_jwt'); } catch {} showLogin(); } }, 'Sign out')),
@@ -148,7 +149,8 @@ function eventSection(ev, x, settings) {
       h('h2', { style: 'margin-top:1rem' }, 'Invited and volunteers'),
       h('p', {}, `Coming: ${inv.filter(i => i.status === 'yes').map(nm).join(', ') || 'none yet'}`),
       h('p', {}, `Haven’t replied: ${inv.filter(i => i.status === 'pending').map(nm).join(', ') || 'no one'}`),
-      h('p', {}, `Can’t make it: ${inv.filter(i => i.status === 'declined').map(nm).join(', ') || 'no one'}`),
+      h('p', {}, `Declined the invitation: ${inv.filter(i => i.status === 'declined').map(nm).join(', ') || 'no one'}`),
+      h('p', {}, `Voted no on this date (not invited): ${x.ballots.filter(b => !inv.some(i => i.attendee_id === b.attendee_id)).map(nm).join(', ') || 'no one'}`),
       h('p', {}, x.signups.length ? x.signups.map(s => `${s.role}: ${nm(s)}${s.details ? ' (' + s.details + ')' : ''}${s.address ? ' @ ' + s.address : ''}`).join(' · ') : 'No volunteers yet.'));
   }
   sec.append(h('p', {}, h('button', { class: 'danger', type: 'button', onclick: () => { if (confirm('Cancel this month’s event? The poll and its data stay in the database.')) act(() => rest(`events?id=eq.${ev.id}`, { method: 'PATCH', body: { status: 'cancelled' } }), 'Event cancelled.'); } }, 'Cancel this event')));

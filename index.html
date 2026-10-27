@@ -72,6 +72,7 @@ const MSG = {
   not_scheduled: 'The date hasn’t been set yet.',
   not_found: 'That entry wasn’t found.',
   address_required: 'Please enter the address where you’ll host.',
+  details_required: 'Please tell us what you’re bringing.',
   too_many_posts: 'You’re posting a lot, so please wait a bit before posting again.'
 };
 const msg = e => MSG[e.message] || 'Something went wrong. Please try again.';
@@ -135,6 +136,56 @@ function postsSection(initial) {
 }
 
 const ROLES = { host: 'Host', food: 'Food', beverage: 'Beverages', game: 'Games' };
+const mapsLink = a => h('a', { href: 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(a), target: '_blank', rel: 'noopener' }, a);
+
+// Loads Google Places once, only if a key is set in config.js. Resolves true when ready, otherwise false.
+let placesReady = null;
+function loadPlaces() {
+  if (!C.GOOGLE_MAPS_KEY) return Promise.resolve(false);
+  if (!placesReady) placesReady = new Promise(res => {
+    window.__gmReady = async () => { try { await google.maps.importLibrary('places'); res(true); } catch { res(false); } };
+    window.gm_authFailure = () => res(false);
+    const sc = document.createElement('script');
+    sc.async = true; sc.onerror = () => res(false);
+    sc.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(C.GOOGLE_MAPS_KEY) + '&loading=async&v=weekly&callback=__gmReady';
+    document.head.append(sc);
+  });
+  return placesReady;
+}
+
+// The one input in the sign-up form. Host: an address picked from Google suggestions
+// (a plain required text box if Google isn’t available). Other roles: required text.
+function makeField(role) {
+  const box = h('div');
+  if (role !== 'host') {
+    const inp = h('input', { type: 'text', maxlength: 200, 'aria-label': 'What you’ll bring', placeholder: 'What you’ll bring, e.g. chips and salsa' });
+    box.append(inp);
+    return { box, get: () => inp.value.trim() || null, problem: 'Please tell us what you’re bringing.' };
+  }
+  const plain = h('input', { type: 'text', maxlength: 200, 'aria-label': 'Address where you’ll host', placeholder: 'Address where you’ll host' });
+  const f = { box, picked: null, verified: false, problem: 'Please enter your address.' };
+  f.get = () => f.verified ? f.picked : (plain.value.trim() || null);
+  box.append(plain);
+  loadPlaces().then(ok => {
+    if (!ok) return;
+    const pac = new google.maps.places.PlaceAutocompleteElement({});
+    const shown = h('p', { class: 'sub' }, 'Start typing, then pick your address from the list.');
+    pac.addEventListener('gmp-select', async ({ placePrediction }) => {
+      try {
+        const place = placePrediction.toPlace();
+        await place.fetchFields({ fields: ['formattedAddress'] });
+        f.picked = place.formattedAddress || null;
+        shown.textContent = f.picked ? 'Address to use: ' + f.picked : 'Please pick an address from the list.';
+      } catch {                       // lookup failed: fall back to the plain box
+        f.verified = false; box.replaceChildren(plain);
+      }
+    });
+    f.verified = true; f.problem = 'Please pick your address from the suggestions.';
+    box.replaceChildren(pac, shown);
+  });
+  return f;
+}
+
 function volunteerSection(initial, full) {
   const wrap = h('div', { class: 'card' });
   const draw = (signups, err) => {
@@ -151,15 +202,25 @@ function volunteerSection(initial, full) {
           s.mine && h('button', { class: 'x', type: 'button', 'aria-label': 'Remove my sign-up', onclick: () => act(() => rpc('remove_signup', { p_token: token, p_signup_id: s.id })) }, '×')))
           : h('span', { class: 'sub' }, 'Still needed')));
     }
-    const sel = h('select', { id: 'role' }, Object.entries(ROLES).map(([r, l]) => h('option', { value: r }, l)));
-    const det = h('input', { type: 'text', id: 'details', maxlength: 200, placeholder: 'Details, e.g. chips and salsa' });
-    const addr = h('input', { type: 'text', id: 'addr', maxlength: 200, placeholder: 'Your address (only guests who reply yes will see it)', style: 'display:none' });
-    sel.addEventListener('change', () => { addr.style.display = sel.value === 'host' ? '' : 'none'; });
+    const hostTaken = signups.some(s => s.role === 'host');
+    const sel = h('select', { id: 'role' }, Object.entries(ROLES).map(([r, l]) =>
+      h('option', { value: r, disabled: r === 'host' && hostTaken }, r === 'host' && hostTaken ? 'Host (already taken)' : l)));
+    if (hostTaken) sel.value = 'food';
+    const slot = h('div'), problem = h('div');
+    let field = makeField(sel.value);
+    slot.append(field.box);
+    sel.addEventListener('change', () => { field = makeField(sel.value); slot.replaceChildren(field.box); problem.replaceChildren(); });
+    const add = () => {
+      const v = field.get();
+      if (!v) return problem.replaceChildren(note(field.problem, 'bad'));
+      const host = sel.value === 'host';
+      act(() => rpc('add_signup', { p_token: token, p_role: sel.value, p_details: host ? '' : v, p_address: host ? v : null }));
+    };
     fill(wrap, h('h2', { style: 'margin-top:0' }, 'Who’s bringing what'),
       !full && h('p', { class: 'sub' }, 'Offers are welcome now. If the date that gets chosen doesn’t work for you, your offer is removed.'),
       list, h('h2', {}, 'Volunteer'),
-      h('div', { class: 'form' }, h('label', { for: 'role' }, 'I can bring'), sel, det, addr,
-        h('button', { class: 'primary', type: 'button', onclick: () => act(() => rpc('add_signup', { p_token: token, p_role: sel.value, p_details: det.value, p_address: addr.value })) }, 'Add')),
+      h('div', { class: 'form' }, h('label', { for: 'role' }, 'I can help with'), sel, slot, problem,
+        h('button', { class: 'primary', type: 'button', onclick: add }, 'Add')),
       err && note(err, 'bad'));
   };
   draw(initial);
@@ -201,7 +262,7 @@ function renderBoard(b) {
   if (!ev) return shell(greet(b), note('The date hasn’t been set yet.'));
   const items = [greet(b), h('div', { class: 'card' },
     h('h2', { style: 'margin-top:0' }, fmtDate(ev.chosen_date)),
-    h('p', {}, [fmtTime(ev.start_time), ev.location].filter(Boolean).join(' · ')),
+    h('p', {}, fmtTime(ev.start_time), ev.start_time && ev.location && ' · ', ev.location && mapsLink(ev.location)),
     ev.notes && h('p', { class: 'sub' }, ev.notes),
     st === 'pending' && h('p', { class: 'sub' }, 'The address is shared with guests who reply yes.'),
     st === 'yes' && !ev.location && h('p', { class: 'sub' }, 'The address will appear here once a host signs up.'))];
