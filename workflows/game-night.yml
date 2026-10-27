@@ -35,8 +35,8 @@ jobs:
           # Scheduled runs use the repository variable DRY_RUN (stays "true" until you set it to "false")
           DRY_RUN: ${{ inputs.dry_run || vars.DRY_RUN || 'true' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          ORGANIZER_EMAIL: ${{ secrets.ORGANIZER_EMAIL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASESERVICEROLEKEY }}
+          GMAIL_ADDRESS: ${{ secrets.COMMSADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.COMMSPASSWORD }}
+          ORGANIZER_EMAIL: ${{ secrets.ORGANIZSEREMAIL }}
           SITE_URL: ${{ secrets.SITE_URL }}
