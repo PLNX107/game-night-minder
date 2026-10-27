@@ -1,0 +1,42 @@
+name: Game Night job
+
+on:
+  schedule:
+    - cron: '17 */3 * * *'      # every 3 hours, at 17 minutes past
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: log what would happen, send no email, change nothing'
+        type: choice
+        options: ['true', 'false']
+        default: 'true'
+
+concurrency:
+  group: game-night
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run job
+        run: node jobs/run.mjs
+        env:
+          # Scheduled runs use the repository variable DRY_RUN (stays "true" until you set it to "false")
+          DRY_RUN: ${{ inputs.dry_run || vars.DRY_RUN || 'true' }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ORGANIZER_EMAIL: ${{ secrets.ORGANIZER_EMAIL }}
+          SITE_URL: ${{ secrets.SITE_URL }}

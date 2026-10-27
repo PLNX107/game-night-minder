@@ -1,0 +1,9 @@
+{
+  "name": "game-night-minder-job",
+  "private": true,
+  "type": "module",
+  "description": "Scheduled job: creates the monthly poll, sends emails, and summarizes for the organizer",
+  "scripts": { "start": "node jobs/run.mjs" },
+  "dependencies": { "nodemailer": "7.0.13" },
+  "engines": { "node": ">=20" }
+}
