@@ -38,5 +38,5 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASESERVICEROLEKEY }}
           GMAIL_ADDRESS: ${{ secrets.COMMSADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.COMMSPASSWORD }}
-          ORGANIZER_EMAIL: ${{ secrets.ORGANIZSEREMAIL }}
+          ORGANIZER_EMAIL: ${{ secrets.ORGANIZERMAIL }}
           SITE_URL: ${{ secrets.SITE_URL }}
