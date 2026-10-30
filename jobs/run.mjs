@@ -13,6 +13,7 @@ const ORGANIZER = env('ORGANIZER_EMAIL');
 const NOW = env('FAKE_NOW') ? new Date(env('FAKE_NOW')) : new Date();   // FAKE_NOW is for testing only
 const POLL_OPEN_HOUR = 9;                           // local hour on the last Sunday before the poll opens
 const SUMMARY_GAP_MS = 12 * 3600e3;                 // at most one organizer summary per 12 hours
+const GAME_PICK_FALLBACK_DAYS = 5;                 // pick a Toy Box game by then even if no host has signed up
 const MAX_ATTEMPTS = 3;                             // give up on an address after 3 failed sends
 const TEST_MAIL = env('MAIL_TRANSPORT') === 'json'; // test hook: print messages instead of sending
 
@@ -172,7 +173,7 @@ async function handlePolling(ev, settings) {
 // ---------- step 3: scheduled phase ----------
 async function handleScheduled(ev, settings) {
   if (ev.chosen_date < today) return;                       // the game day has passed
-  const inv = await invitationsOf(ev), sg = await signupsOf(ev);
+  const inv = await invitationsOf(ev); let sg = await signupsOf(ev);
   const guests = inv.filter(i => i.attendees.active);
 
   // 3a. invitations (no address), then unlock the address on the website
@@ -217,7 +218,26 @@ async function handleScheduled(ev, settings) {
     }
   }
 
-  // 3d. organizer summary, only when something changed (at most every 12 hours)
+  // 3d. The Toy Box: pick a game once a host has signed up, or within 5 days of game day.
+  // The pick shows up as a Games entry for an owner (the host if the host owns it).
+  const live = await db(`game_picks?select=id&event_id=eq.${ev.id}&signup_id=not.is.null`);
+  const daysLeft = (new Date(ev.chosen_date + 'T12:00:00Z').getTime() - NOW.getTime()) / 864e5;
+  if (!live.length && (sg.some(s => s.role === 'host') || daysLeft <= GAME_PICK_FALLBACK_DAYS)) {
+    if (DRY) console.log('[dry run] would pick a game from The Toy Box');
+    else {
+      const r = await rpc('pick_game', { p_event_id: ev.id, p_reroll: false });
+      console.log(`Toy Box: ${r.status}${r.title ? ' - ' + r.title + ' (' + r.owner + ')' : ''}`);
+      if (r.status === 'picked') {
+        sg = await signupsOf(ev);
+        const o = inv.find(i => i.attendee_id === r.owner_id);
+        if (o) await send(ev, o.attendees, 'game_pick', o.attendees.email, `Game Night: ${r.title} was picked from The Toy Box`,
+          compose(o.attendees.name, [`The Toy Box picked ${r.title} for game night on ${fmtDate(ev.chosen_date)}, and you own it, so it’s on your list.`,
+            'If you can’t bring it, remove it on the page and the job will pick another game.'], { label: 'Open the page', url: link(o.attendees) }));
+      }
+    }
+  }
+
+  // 3e. organizer summary, only when something changed (at most every 12 hours)
   const declined = guests.filter(i => i.status === 'declined').map(i => i.attendees.name);
   const digest = createHash('sha256').update(JSON.stringify([
     inv.map(i => [i.attendees.name, i.status]).sort(), sg.map(s => [s.role, s.attendees.name, s.details, s.address])])).digest('hex').slice(0, 16);
