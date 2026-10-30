@@ -27,7 +27,8 @@ button,select,input[type=text]{font:inherit;color:inherit}
 .x{background:none;border:0;cursor:pointer;color:var(--muted);font-size:1.1rem;padding:0 .2rem}
 .form{display:grid;gap:.5rem}
 .grid{width:100%;border-collapse:collapse;font-size:.95rem}.grid th,.grid td{padding:.3rem .4rem;border-bottom:1px solid var(--line);text-align:center}.grid th:first-child,.grid td:first-child{text-align:left}
-.post{padding:.5rem 0;border-bottom:1px solid var(--line)}.post .body{white-space:pre-wrap}
+.post{padding:.5rem 0;border-bottom:1px solid var(--line)}
+.game{padding:.6rem 0;border-bottom:1px solid var(--line)}.post .body{white-space:pre-wrap}
 textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.6rem;font:inherit;color:inherit}
 select,input[type=text]{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.6rem;min-height:2.75rem;width:100%}
 </style>
@@ -72,6 +73,8 @@ const MSG = {
   not_scheduled: 'The date hasn’t been set yet.',
   not_found: 'That entry wasn’t found.',
   address_required: 'Please enter the address where you’ll host.',
+  game_exists: 'That game is already in The Toy Box. Just tick it below!',
+  invalid_title: 'Please enter a game name (up to 100 characters).',
   details_required: 'Please tell us what you’re bringing.',
   too_many_posts: 'You’re posting a lot, so please wait a bit before posting again.'
 };
@@ -92,7 +95,7 @@ async function load() {
   if (!token) return shell(h('h1', {}, 'Game Night'), note(MSG.invalid_link, 'bad'));
   try {
     const poll = await rpc('get_poll', { p_token: token });
-    if (!poll.event) return shell(greet(poll), note('There’s nothing to vote on right now. Check back soon.'));
+    if (!poll.event) return shell(greet(poll), note('There’s nothing to vote on right now. Check back soon.'), toyboxSection());
     if (poll.event.status === 'polling') return renderVote(poll);
     return renderBoard(await rpc('get_event_board', { p_token: token }));
   } catch (e) {
@@ -227,6 +230,32 @@ function volunteerSection(initial, full) {
   return wrap;
 }
 
+function toyboxSection() {
+  const wrap = h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'The Toy Box'), h('p', { class: 'sub' }, 'Loading…'));
+  const draw = (games, err) => {
+    const act = async fn => {
+      try { await fn(); draw(await rpc('get_toybox', { p_token: token })); }
+      catch (e) { draw(games, msg(e)); }
+    };
+    const mark = (g, owns, wants) => act(() => rpc('set_game_mark', { p_token: token, p_game_id: g.id, p_owns: owns, p_wants: wants }));
+    const title = h('input', { type: 'text', maxlength: 100, placeholder: 'Add a game, e.g. Catan', 'aria-label': 'Game name' });
+    fill(wrap, h('h2', { style: 'margin-top:0' }, 'The Toy Box'),
+      h('p', { class: 'sub' }, 'Add games you’d like to play. Tick the ones you own and the ones you want to play. Once the date is set, one game owned by a guest who’s coming is picked at random, favoring the popular ones.'),
+      games.length ? games.map(g => h('div', { class: 'game' },
+        h('strong', {}, g.title),
+        h('div', { class: 'sub' }, `Owned by: ${g.owners.join(', ') || 'no one yet'} · ${g.wants} want to play`),
+        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_owns, onchange: e => mark(g, e.target.checked, g.mine_wants) }), 'I own it'),
+        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_wants, onchange: e => mark(g, g.mine_owns, e.target.checked) }), 'I want to play this!'),
+        g.can_delete && h('button', { class: 'link', type: 'button', onclick: () => { if (confirm('Remove ' + g.title + ' from The Toy Box?')) act(() => rpc('delete_game', { p_token: token, p_game_id: g.id })); } }, 'Remove')))
+        : h('p', { class: 'sub' }, 'No games yet. Add the first one!'),
+      h('div', { class: 'form' }, title,
+        h('button', { class: 'primary', type: 'button', onclick: () => { if (title.value.trim()) act(() => rpc('add_game', { p_token: token, p_title: title.value })); } }, 'Add game')),
+      err && note(err, 'bad'));
+  };
+  rpc('get_toybox', { p_token: token }).then(draw).catch(e => draw([], msg(e)));
+  return wrap;
+}
+
 function renderVote(poll) {
   const ans = {};
   poll.options.forEach(o => { if (o.available !== null) ans[o.id] = o.available; });
@@ -249,7 +278,7 @@ function renderVote(poll) {
   });
   shell(greet(poll),
     h('p', { class: 'sub' }, `Which Saturdays in ${fmtMonth(poll.event.month)} work for you? Please answer every date.`),
-    ...rows, btn, out, votesGrid(poll), volunteerSection(poll.signups, false), postsSection(poll.posts));
+    ...rows, btn, out, votesGrid(poll), volunteerSection(poll.signups, false), toyboxSection(), postsSection(poll.posts));
   sync();
 }
 
@@ -266,7 +295,7 @@ function renderBoard(b) {
     ev.notes && h('p', { class: 'sub' }, ev.notes),
     st === 'pending' && h('p', { class: 'sub' }, 'The address is shared with guests who reply yes.'),
     st === 'yes' && !ev.location && h('p', { class: 'sub' }, 'The address will appear here once a host signs up.'))];
-  const tail = [peopleSection(b.people), h('details', {}, h('summary', {}, 'See everyone’s votes'), votesGrid(b)), postsSection(b.posts)];
+  const tail = [peopleSection(b.people), h('details', {}, h('summary', {}, 'See everyone’s votes'), votesGrid(b)), toyboxSection(), postsSection(b.posts)];
 
   if (st === null) return shell(...items, note('The date chosen didn’t work for you, so you weren’t included. If that’s changed, let the organizer know.'), ...tail);
   if (st === 'declined') return shell(...items, note('You’ve told us you can’t make it.'),

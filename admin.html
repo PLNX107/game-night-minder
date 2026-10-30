@@ -91,10 +91,11 @@ async function render(msgNode) {
   if (!C.SUPABASE_URL || !C.SUPABASE_KEY) return app.replaceChildren(note('config.js isn’t filled in yet.', 'bad'));
   if (!jwt) return showLogin();
   try {
-    const [attendees, settingsArr, events] = await Promise.all([
+    const [attendees, settingsArr, events, games] = await Promise.all([
       rest('attendees?select=*&order=name'),
       rest('app_settings?select=*&id=eq.1'),
-      rest('events?select=*&status=neq.cancelled&order=month.desc&limit=1')]);
+      rest('events?select=*&status=neq.cancelled&order=month.desc&limit=1'),
+      rest('toybox_games?select=id,title,toybox_marks(attendee_id,owns,wants)&order=title')]);
     const ev = events[0] || null;
     let extra = { progress: null, results: [], invites: [], signups: [], ballots: [] };
     if (ev) {
@@ -107,7 +108,7 @@ async function render(msgNode) {
     }
     app.replaceChildren(
       h('div', { class: 'row' }, h('h1', { style: 'flex:1' }, 'Game Night Admin'), h('button', { type: 'button', onclick: () => { jwt = null; try { sessionStorage.removeItem('gnm_jwt'); } catch {} showLogin(); } }, 'Sign out')),
-      msgNode || '', eventSection(ev, extra, settingsArr[0]), rosterSection(attendees), settingsSection(settingsArr[0]));
+      msgNode || '', eventSection(ev, extra, settingsArr[0]), rosterSection(attendees), toyboxAdmin(games, attendees), settingsSection(settingsArr[0]));
   } catch (e) {
     if (e.message === 'session_expired') return showLogin('Your session expired. Please sign in again.');
     app.replaceChildren(h('h1', {}, 'Game Night Admin'), note('Couldn’t load data: ' + e.message, 'bad'), h('button', { type: 'button', onclick: () => render() }, 'Retry'));
@@ -116,7 +117,7 @@ async function render(msgNode) {
 
 // Run an action, then re-render with a success or error note
 async function act(fn, okText) {
-  try { await fn(); await render(note(okText, 'ok')); }
+  try { await fn(); await render(note(typeof okText === 'function' ? okText() : okText, 'ok')); }
   catch (e) { if (e.message === 'session_expired') showLogin('Your session expired. Please sign in again.'); else await render(note(e.message, 'bad')); }
 }
 
@@ -151,10 +152,30 @@ function eventSection(ev, x, settings) {
       h('p', {}, `Haven’t replied: ${inv.filter(i => i.status === 'pending').map(nm).join(', ') || 'no one'}`),
       h('p', {}, `Declined the invitation: ${inv.filter(i => i.status === 'declined').map(nm).join(', ') || 'no one'}`),
       h('p', {}, `Voted no on this date (not invited): ${x.ballots.filter(b => !inv.some(i => i.attendee_id === b.attendee_id)).map(nm).join(', ') || 'no one'}`),
-      h('p', {}, x.signups.length ? x.signups.map(s => `${s.role}: ${nm(s)}${s.details ? ' (' + s.details + ')' : ''}${s.address ? ' @ ' + s.address : ''}`).join(' · ') : 'No volunteers yet.'));
+      h('p', {}, x.signups.length ? x.signups.map(s => `${s.role}: ${nm(s)}${s.details ? ' (' + s.details + ')' : ''}${s.address ? ' @ ' + s.address : ''}`).join(' · ') : 'No volunteers yet.'),
+      h('p', {}, h('button', { type: 'button', onclick: () => pickGame(ev.id, false) }, 'Pick a Toy Box game'), ' ', h('button', { type: 'button', onclick: () => { if (confirm('Replace the current game pick with a different one?')) pickGame(ev.id, true); } }, 'Pick a different game')));
   }
   sec.append(h('p', {}, h('button', { class: 'danger', type: 'button', onclick: () => { if (confirm('Cancel this month’s event? The poll and its data stay in the database.')) act(() => rest(`events?id=eq.${ev.id}`, { method: 'PATCH', body: { status: 'cancelled' } }), 'Event cancelled.'); } }, 'Cancel this event')));
   return sec;
+}
+
+function pickGame(evId, reroll) {
+  let out = '';
+  act(async () => {
+    const r = await rpc('admin_pick_game', { p_event_id: evId, p_reroll: reroll });
+    out = r.status === 'picked' ? `Picked ${r.title}, brought by ${r.owner}.`
+      : r.status === 'already_picked' ? 'A game is already picked. Use “Pick a different game” to replace it.'
+      : 'No eligible game: no confirmed guest owns a game that hasn’t been used yet.';
+  }, () => out);
+}
+
+function toyboxAdmin(games, attendees) {
+  const name = id => (attendees.find(a => a.id === id) || {}).name || '?';
+  const rows = games.map(g => h('tr', {}, h('td', {}, g.title),
+    h('td', {}, 'Owned by: ' + (g.toybox_marks.filter(m => m.owns).map(m => name(m.attendee_id)).join(', ') || 'no one')),
+    h('td', {}, g.toybox_marks.filter(m => m.wants).length + ' want'),
+    h('td', {}, h('button', { class: 'danger', type: 'button', onclick: () => { if (confirm(`Delete ${g.title} from The Toy Box?`)) act(() => rest(`toybox_games?id=eq.${g.id}`, { method: 'DELETE' }), 'Game deleted.'); } }, 'Delete'))));
+  return h('section', {}, h('h2', {}, `The Toy Box (${games.length})`), games.length ? h('table', {}, rows) : h('p', { class: 'sub' }, 'No games yet.'));
 }
 
 async function createEvent(monthStr, settings) {

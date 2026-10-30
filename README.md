@@ -39,6 +39,12 @@ See `.env.example`. Never commit real values.
 - **Attendees** have no accounts. Each has a private link containing a token, and all public access goes through token-checked database functions.
 - **The organizer** logs in on the admin page. Only users listed in the `admins` table have access.
 
+## The Toy Box
+
+A shared game list on every attendee page. Anyone can add a game (the person who adds it automatically ticks "I want to play this!"), tick "I own it", and tick "I want to play this!". Only the person who added a game can remove it; the organizer can remove any game from the admin page, and can pick or re-pick a game by hand.
+
+Pick rules: candidates are games owned by at least one confirmed guest (status yes), not already used for this event. Choice is weighted random, with weight = 1 + the number of confirmed guests who want to play it. The pick becomes a Games entry for an owner, the host if the host owns it, otherwise a random owner among confirmed guests.
+
 ## The scheduled job
 
 Runs every 3 hours from GitHub Actions and is safe to repeat. Each run does whatever is due:
@@ -47,7 +53,8 @@ Runs every 3 hours from GitHub Actions and is safe to repeat. Each run does what
 2. **When the voting window closes** (7 days later by default): if more than half have voted, locks in the winning date and sends invitations to yes and pending guests (no address). Otherwise it reminds non-voters, alerts you once, and keeps checking.
 3. **After invitations:** pending guests get one reminder after `invite_reminder_days` (default 3), with an event summary and no address.
 4. **Once a host has entered an address:** each guest who said yes gets the summary with the address, once. Guests who reply yes later get the same email on the next run.
-5. **You get a summary** when something changes (replies, volunteers), at most every 12 hours.
+5. **The Toy Box pick:** once a host has signed up (or 5 days before game day), picks a game owned by a confirmed guest. Weighted random: weight = 1 + the number of confirmed guests who ticked "I want to play this!". It becomes a Games entry for an owner, the host if the host owns it, and the owner gets an email. If the owner declines, the entry disappears and the job picks again.
+6. **You get a summary** when something changes (replies, volunteers), at most every 12 hours.
 
 Every email is recorded in the `email_log` table. A failed address is retried up to 3 times.
 
