@@ -103,12 +103,15 @@ const link = a => `${SITE}?t=${a.token}`;
 const ROLE = { host: 'Host', food: 'Food', beverage: 'Beverages', game: 'Games' };
 const hostAddress = (ev, sg) => (sg.find(s => s.role === 'host') || {}).address || ev.location || null;
 
-function summaryBlocks(ev, inv, sg, address) {
+// viewer: 'yes' | 'pending' | 'organizer' (only changes the Where line when there is no address yet)
+function summaryBlocks(ev, inv, sg, address, viewer) {
   const names = st => inv.filter(i => i.status === st && i.attendees.active).map(i => i.attendees.name);
   const yes = names('yes'), pending = names('pending');
   const blocks = [`When: ${fmtDate(ev.chosen_date)}${ev.start_time ? ' at ' + fmtTime(ev.start_time) : ''}`];
   if (address) blocks.push(`Where: ${address}`, `Map: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`);
-  else blocks.push('Where: the address is shared with guests once they reply yes.');
+  else blocks.push(viewer === 'yes' ? 'Where: to be announced. You’ll get another email as soon as a host confirms the address.'
+    : viewer === 'organizer' ? 'Where: no host address yet.'
+    : 'Where: the address is shared with guests once they reply yes.');
   if (ev.notes) blocks.push(`Notes: ${ev.notes}`);
   blocks.push(`Coming (${yes.length}): ${yes.join(', ') || 'no one yet'}`);
   if (pending.length) blocks.push(`Haven’t replied yet: ${pending.join(', ')}`);
@@ -182,11 +185,15 @@ async function handleScheduled(ev, settings) {
     for (const i of guests.filter(i => i.status !== 'declined')) {
       const a = i.attendees;
       if (await emailState(ev, a, 'invitation') === 'done') continue;
+      const yes = i.status === 'yes', address = yes ? hostAddress(ev, sg) : null;
+      const closing = yes ? 'You can update your responses at any time, including your RSVP, what you’re bringing, and your Toy Box picks.'
+        : 'Please let us know if you can make it. You can update your response at any time.';
       const ok = await send(ev, a, 'invitation', a.email, `You’re invited: Game Night on ${fmtDate(ev.chosen_date)}`,
-        compose(a.name, ['The date is set.', ...summaryBlocks(ev, inv, sg, null),
-          'Please let us know if you can make it, and sign up to host or bring something. Anything you sign up for counts as a yes.'],
-          { label: 'Reply and sign up', url: link(a) }));
+        compose(a.name, ['The date is set.', ...summaryBlocks(ev, inv, sg, address, i.status), closing],
+          { label: yes ? 'Update your responses' : 'Reply now', url: link(a) }));
       if (!ok) allDone = false;
+      // an invitation that already carried the address counts as their details email
+      if (ok && !DRY && address) await patch('invitations', `event_id=eq.${ev.id}&attendee_id=eq.${a.id}`, { details_sent_at: NOW.toISOString() });
     }
     if (allDone && !DRY) await patch('events', `id=eq.${ev.id}`, { invites_sent_at: NOW.toISOString() });
     return;
@@ -199,7 +206,7 @@ async function handleScheduled(ev, settings) {
       const a = i.attendees;
       if (await emailState(ev, a, 'invite_reminder') === 'done') continue;
       const ok = await send(ev, a, 'invite_reminder', a.email, `Reminder: are you coming to Game Night on ${fmtDate(ev.chosen_date)}?`,
-        compose(a.name, ['We haven’t heard from you yet.', ...summaryBlocks(ev, inv, sg, null),
+        compose(a.name, ['We haven’t heard from you yet.', ...summaryBlocks(ev, inv, sg, null, 'pending'),
           'Let us know if you’re coming. The address is shared once you reply yes.'], { label: 'Reply now', url: link(a) }));
       if (ok && !DRY) await patch('invitations', `event_id=eq.${ev.id}&attendee_id=eq.${a.id}`, { reminder_sent_at: NOW.toISOString() });
     }
@@ -210,9 +217,9 @@ async function handleScheduled(ev, settings) {
   if (address) {
     for (const i of guests.filter(i => i.status === 'yes')) {
       const a = i.attendees;
-      if (await emailState(ev, a, 'details') === 'done') continue;
+      if (i.details_sent_at || await emailState(ev, a, 'details') === 'done') continue;
       const ok = await send(ev, a, 'details', a.email, `Game Night details: ${fmtDate(ev.chosen_date)}`,
-        compose(a.name, ['Great, you’re in! Here are the details so far.', ...summaryBlocks(ev, inv, sg, address),
+        compose(a.name, ['Great, you’re in! Here are the details so far.', ...summaryBlocks(ev, inv, sg, address, 'yes'),
           'The page always has the latest list of who’s bringing what, and you can leave messages there.'], { label: 'Open the page', url: link(a) }));
       if (ok && !DRY) await patch('invitations', `event_id=eq.${ev.id}&attendee_id=eq.${a.id}`, { details_sent_at: NOW.toISOString() });
     }
@@ -244,7 +251,7 @@ async function handleScheduled(ev, settings) {
   const recently = ev.organizer_summary_at && NOW.getTime() - new Date(ev.organizer_summary_at).getTime() < SUMMARY_GAP_MS;
   if (digest !== ev.organizer_digest && !recently) {
     const ok = await send(ev, null, 'organizer_summary', ORGANIZER, `Game Night summary: ${fmtDate(ev.chosen_date)}`,
-      compose('Organizer', [...summaryBlocks(ev, inv, sg, address || 'no host address yet'),
+      compose('Organizer', [...summaryBlocks(ev, inv, sg, address, 'organizer'),
         `Can’t make it: ${declined.join(', ') || 'no one'}.`], { label: 'Open the admin page', url: SITE + 'admin.html' }));
     if (ok && !DRY) await patch('events', `id=eq.${ev.id}`, { organizer_digest: digest, organizer_summary_at: NOW.toISOString() });
   }
