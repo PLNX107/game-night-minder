@@ -11,7 +11,12 @@
 body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:100rem;margin:0 auto;padding:1.25rem 1.25rem 3rem}
 .top{display:grid;grid-template-columns:3fr 1fr;gap:1.25rem;align-items:start;margin:.5rem 0 1rem}
-.side{position:sticky;top:1rem;max-height:calc(100vh - 2rem);overflow:auto}
+.side{position:sticky;top:1rem;max-height:calc(100vh - 2rem)}
+.side.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1rem;display:flex;flex-direction:column;overflow:hidden}
+.side .tb{overflow:auto;min-height:0}
+details.game>summary{cursor:pointer;list-style:none;padding:.2rem 0}
+details.game>summary::-webkit-details-marker{display:none}
+details.game>summary::before{content:'▸ ';color:var(--muted)}details.game[open]>summary::before{content:'▾ '}
 @media (max-width:899px){.top{grid-template-columns:1fr}.side{position:static;max-height:none}}
 details.sect{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:.8rem 0}
 details.sect>summary{cursor:pointer;padding:.8rem 1rem;font-weight:600;font-size:1.05rem;list-style:none}
@@ -244,7 +249,7 @@ function volunteerSection(initial, early) {
 }
 
 function toyboxSection() {
-  const wrap = h('div', {}, h('p', { class: 'sub' }, 'Loading…'));
+  const wrap = h('div', { class: 'tb' }, h('p', { class: 'sub' }, 'Loading…'));
   const draw = (games, err) => {
     const act = async fn => {
       try { await fn(); draw(await rpc('get_toybox', { p_token: token })); }
@@ -254,14 +259,21 @@ function toyboxSection() {
     const title = h('input', { type: 'text', maxlength: 100, placeholder: 'Add a game, e.g. Catan', 'aria-label': 'Game name' });
     fill(wrap,
       h('p', { class: 'sub' }, 'Add games you’d like to play, then tick the ones you own and how you feel about each. Once the date is set, one game owned by a guest who’s coming is picked at random, favoring popular ones and skipping games more guests don’t want than want.'),
-      games.length ? games.map(g => h('div', { class: 'game' },
-        h('strong', {}, g.title),
-        h('div', { class: 'sub' }, `Owned by: ${g.owners.join(', ') || 'no one yet'} · ${g.wants} want to play${g.avoids ? ' · ' + g.avoids + ' would rather not' : ''}`),
-        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_owns, onchange: e => mark(g, e.target.checked, g.mine_wants, g.mine_avoids) }), 'I own it'),
-        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_wants, onchange: e => mark(g, g.mine_owns, e.target.checked, e.target.checked ? false : g.mine_avoids) }), 'I want to play this!'),
-        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_avoids, onchange: e => mark(g, g.mine_owns, e.target.checked ? false : g.mine_wants, e.target.checked) }), 'I don’t want to play this'),
-        g.can_delete && h('button', { class: 'link', type: 'button', onclick: () => { if (confirm('Remove ' + g.title + ' from The Toy Box?')) act(() => rpc('delete_game', { p_token: token, p_game_id: g.id })); } }, 'Remove')))
-        : h('p', { class: 'sub' }, 'No games yet. Add the first one!'),
+      games.length ? games.map(g => {
+        const mine = [g.mine_owns && 'own', g.mine_wants && 'want', g.mine_avoids && 'pass'].filter(Boolean);
+        const row = h('details', { class: 'game' },
+          h('summary', {}, h('strong', {}, g.title),
+            h('span', { class: 'sub' }, ` · ${g.owners.length} own · ${g.wants} want${g.avoids ? ' · ' + g.avoids + ' pass' : ''}${mine.length ? ' · you: ' + mine.join(', ') : ''}`)),
+          h('div', { class: 'sub' }, `Owned by: ${g.owners.join(', ') || 'no one yet'} · ${g.wants} want to play${g.avoids ? ' · ' + g.avoids + ' would rather not' : ''}`),
+          h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_owns, onchange: e => mark(g, e.target.checked, g.mine_wants, g.mine_avoids) }), 'I own it'),
+          h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_wants, onchange: e => mark(g, g.mine_owns, e.target.checked, e.target.checked ? false : g.mine_avoids) }), 'I want to play this!'),
+          h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_avoids, onchange: e => mark(g, g.mine_owns, e.target.checked ? false : g.mine_wants, e.target.checked) }), 'I don’t want to play this'),
+          g.can_delete && h('button', { class: 'link', type: 'button', onclick: () => { if (confirm('Remove ' + g.title + ' from The Toy Box?')) act(() => rpc('delete_game', { p_token: token, p_game_id: g.id })); } }, 'Remove'));
+        if (openGames.has(g.id)) row.open = true;
+        row.addEventListener('toggle', () => { if (row.open) openGames.add(g.id); else openGames.delete(g.id); });
+        return row;
+      })
+      : h('p', { class: 'sub' }, 'No games yet. Add the first one!'),
       h('div', { class: 'form' }, title,
         h('button', { class: 'primary', type: 'button', onclick: () => { if (title.value.trim()) act(() => rpc('add_game', { p_token: token, p_title: title.value })); } }, 'Add game')),
       err && note(err, 'bad'));
@@ -271,10 +283,25 @@ function toyboxSection() {
 }
 
 const openState = {};   // which sections are expanded; survives re-renders
+const openGames = new Set();   // which Toy Box games are expanded
 const draft = {};       // unsaved vote answers; survive re-renders
 let flash = null;       // one-time confirmation message
 const wide = () => !!(window.matchMedia && window.matchMedia('(min-width: 900px)').matches);
 const fmtDeadline = ts => new Date(ts).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+
+let remountToybox = null;
+const mq = window.matchMedia ? window.matchMedia('(min-width: 900px)') : null;
+if (mq) mq.addEventListener('change', () => remountToybox && remountToybox());
+function toyboxPanel() {
+  const side = h('aside', { class: 'side' }), content = toyboxSection();
+  const mount = () => {
+    if (wide()) { side.className = 'side panel'; fill(side, h('h2', { style: 'margin:0 0 .5rem' }, 'The Toy Box'), content); }
+    else { side.className = 'side'; fill(side, section('toybox', 'The Toy Box', [content], false)); }
+  };
+  mount();
+  remountToybox = mount;
+  return side;
+}
 
 function section(id, title, kids, openByDefault) {
   const d = h('details', { class: 'sect' }, h('summary', {}, title), h('div', { class: 'body' }, kids));
@@ -359,7 +386,7 @@ function renderPage(d) {
   flash = null;
   const main = d.mode === 'none' ? h('div', { class: 'card' }, note('There’s nothing to vote on right now. Check back soon.')) : summaryPanel(d);
   const parts = [greet(d), flashNode,
-    h('div', { class: 'top' }, h('div', {}, main), h('aside', { class: 'side' }, section('toybox', 'The Toy Box', [toyboxSection()], wide())))];
+    h('div', { class: 'top' }, h('div', {}, main), toyboxPanel())];
   if (d.mode !== 'none') {
     if (d.mode === 'poll' || ['yes', 'pending'].includes(d.invitation_status))
       parts.push(section('volunteer', `Volunteer (${d.signups.length} so far)`, [volunteerSection(d.signups, d.mode === 'poll')], true));
