@@ -95,7 +95,7 @@ async function render(msgNode) {
       rest('attendees?select=*&order=name'),
       rest('app_settings?select=*&id=eq.1'),
       rest('events?select=*&status=neq.cancelled&order=month.desc&limit=1'),
-      rest('toybox_games?select=id,title,toybox_marks(attendee_id,owns,wants)&order=title')]);
+      rest('toybox_games?select=id,title,toybox_marks(attendee_id,owns,wants,avoids)&order=title')]);
     const ev = events[0] || null;
     let extra = { progress: null, results: [], invites: [], signups: [], ballots: [] };
     if (ev) {
@@ -173,7 +173,7 @@ function toyboxAdmin(games, attendees) {
   const name = id => (attendees.find(a => a.id === id) || {}).name || '?';
   const rows = games.map(g => h('tr', {}, h('td', {}, g.title),
     h('td', {}, 'Owned by: ' + (g.toybox_marks.filter(m => m.owns).map(m => name(m.attendee_id)).join(', ') || 'no one')),
-    h('td', {}, g.toybox_marks.filter(m => m.wants).length + ' want'),
+    h('td', {}, g.toybox_marks.filter(m => m.wants).length + ' want · ' + g.toybox_marks.filter(m => m.avoids).length + ' rather not'),
     h('td', {}, h('button', { class: 'danger', type: 'button', onclick: () => { if (confirm(`Delete ${g.title} from The Toy Box?`)) act(() => rest(`toybox_games?id=eq.${g.id}`, { method: 'DELETE' }), 'Game deleted.'); } }, 'Delete'))));
   return h('section', {}, h('h2', {}, `The Toy Box (${games.length})`), games.length ? h('table', {}, rows) : h('p', { class: 'sub' }, 'No games yet.'));
 }

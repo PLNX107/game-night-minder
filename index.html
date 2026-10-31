@@ -9,7 +9,19 @@
 @media (prefers-color-scheme:dark){:root{--bg:#16181a;--card:#1f2224;--ink:#ecebe8;--muted:#9aa0a6;--line:#363a3d;--accent:#5fb89f;--on-accent:#0d1b16;--bad:#f2867f;--ok:#7fd49b}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:34rem;margin:0 auto;padding:1.5rem 1rem 3rem}
+main{max-width:100rem;margin:0 auto;padding:1.25rem 1.25rem 3rem}
+.top{display:grid;grid-template-columns:3fr 1fr;gap:1.25rem;align-items:start;margin:.5rem 0 1rem}
+.side{position:sticky;top:1rem;max-height:calc(100vh - 2rem);overflow:auto}
+@media (max-width:899px){.top{grid-template-columns:1fr}.side{position:static;max-height:none}}
+details.sect{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:.8rem 0}
+details.sect>summary{cursor:pointer;padding:.8rem 1rem;font-weight:600;font-size:1.05rem;list-style:none}
+details.sect>summary::-webkit-details-marker{display:none}
+details.sect>summary::before{content:'▸ ';color:var(--muted)}details.sect[open]>summary::before{content:'▾ '}
+details.sect>.body{padding:0 1rem 1rem}
+.badge{display:inline-block;padding:.1rem .7rem;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:.85rem;font-weight:600}
+.big{font-size:1.5rem;font-weight:700;margin:.3rem 0}
+h3{font-size:1rem;margin:1rem 0 .4rem}
+.game .opt{display:flex;margin-right:0;min-height:2.25rem}
 h1{font-size:1.6rem;margin:.5rem 0}h2{font-size:1.15rem;margin:1.5rem 0 .5rem}
 .sub{color:var(--muted)}
 .card,fieldset{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem;margin:.6rem 0}
@@ -95,9 +107,10 @@ async function load() {
   if (!token) return shell(h('h1', {}, 'Game Night'), note(MSG.invalid_link, 'bad'));
   try {
     const poll = await rpc('get_poll', { p_token: token });
-    if (!poll.event) return shell(greet(poll), note('There’s nothing to vote on right now. Check back soon.'), toyboxSection());
-    if (poll.event.status === 'polling') return renderVote(poll);
-    return renderBoard(await rpc('get_event_board', { p_token: token }));
+    if (!poll.event) return renderPage({ mode: 'none', attendee: poll.attendee });
+    if (poll.event.status === 'polling') return renderPage({ ...poll, mode: 'poll' });
+    const b = await rpc('get_event_board', { p_token: token });
+    return renderPage(b.event ? { ...b, mode: 'board' } : { mode: 'none', attendee: b.attendee });
   } catch (e) {
     shell(h('h1', {}, 'Game Night'), note(msg(e), 'bad'));
   }
@@ -108,25 +121,25 @@ function votesGrid(d) {
   const t = h('table', { class: 'grid' }, h('tr', {}, h('th', {}, 'Who'), d.options.map(o => h('th', {}, ymd(o.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })))));
   d.people.forEach(p => t.append(h('tr', {}, h('td', {}, p.name), d.options.map(o => h('td', {}, VOTE_MARK(p, o))))));
   const waiting = d.people.filter(p => !p.responded).map(p => p.name);
-  return h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Everyone’s votes'), t,
+  return h('div', {}, h('h3', {}, 'Everyone’s votes'), t,
     h('p', { class: 'sub' }, '✓ yes · ✗ no · – not yet voted' + (waiting.length ? '. Waiting on: ' + waiting.join(', ') : '')));
 }
 
 function peopleSection(people) {
   const line = (t, a) => h('p', {}, h('strong', {}, t + ': '), a.length ? a.join(', ') : 'no one');
   const names = f => people.filter(f).map(p => p.name);
-  return h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Who’s coming'),
+  return h('div', {}, h('h3', {}, 'Who’s coming'),
     line('Coming', names(p => p.invitation === 'yes')),
     line('Haven’t replied', names(p => p.invitation === 'pending')),
     line('Not coming', names(p => p.invitation === 'declined' || (!p.invitation && p.responded))));
 }
 
 function postsSection(initial) {
-  const wrap = h('div', { class: 'card' });
+  const wrap = h('div');
   const draw = (posts, err) => {
     const box = h('textarea', { rows: 3, maxlength: 1000, placeholder: 'Ask a question or share an update…', 'aria-label': 'New message' });
     const refresh = async fn => { try { await fn(); draw(await rpc('get_posts', { p_token: token })); } catch (e) { draw(posts, msg(e)); } };
-    fill(wrap, h('h2', { style: 'margin-top:0' }, 'Message board'),
+    fill(wrap,
       posts.length ? posts.map(p => h('div', { class: 'post' }, h('strong', {}, p.name), ' ',
         h('span', { class: 'sub' }, new Date(p.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })),
         p.mine && h('button', { class: 'x', type: 'button', 'aria-label': 'Delete my message', onclick: () => refresh(() => rpc('delete_post', { p_token: token, p_post_id: p.id })) }, '×'),
@@ -189,11 +202,11 @@ function makeField(role) {
   return f;
 }
 
-function volunteerSection(initial, full) {
-  const wrap = h('div', { class: 'card' });
+function volunteerSection(initial, early) {
+  const wrap = h('div');
   const draw = (signups, err) => {
     const act = async fn => {
-      try { await fn(); if (full) await load(); else draw(await rpc('get_signups', { p_token: token })); }
+      try { await fn(); await load(); }
       catch (e) { draw(signups, msg(e)); }
     };
     const list = h('ul', { class: 'list' });
@@ -219,8 +232,8 @@ function volunteerSection(initial, full) {
       const host = sel.value === 'host';
       act(() => rpc('add_signup', { p_token: token, p_role: sel.value, p_details: host ? '' : v, p_address: host ? v : null }));
     };
-    fill(wrap, h('h2', { style: 'margin-top:0' }, 'Who’s bringing what'),
-      !full && h('p', { class: 'sub' }, 'Offers are welcome now. If the date that gets chosen doesn’t work for you, your offer is removed.'),
+    fill(wrap,
+      early && h('p', { class: 'sub' }, 'Offers are welcome now. If the date that gets chosen doesn’t work for you, your offer is removed.'),
       list, h('h2', {}, 'Volunteer'),
       h('div', { class: 'form' }, h('label', { for: 'role' }, 'I can help with'), sel, slot, problem,
         h('button', { class: 'primary', type: 'button', onclick: add }, 'Add')),
@@ -231,21 +244,22 @@ function volunteerSection(initial, full) {
 }
 
 function toyboxSection() {
-  const wrap = h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'The Toy Box'), h('p', { class: 'sub' }, 'Loading…'));
+  const wrap = h('div', {}, h('p', { class: 'sub' }, 'Loading…'));
   const draw = (games, err) => {
     const act = async fn => {
       try { await fn(); draw(await rpc('get_toybox', { p_token: token })); }
       catch (e) { draw(games, msg(e)); }
     };
-    const mark = (g, owns, wants) => act(() => rpc('set_game_mark', { p_token: token, p_game_id: g.id, p_owns: owns, p_wants: wants }));
+    const mark = (g, owns, wants, avoids) => act(() => rpc('set_game_mark', { p_token: token, p_game_id: g.id, p_owns: owns, p_wants: wants, p_avoids: avoids }));
     const title = h('input', { type: 'text', maxlength: 100, placeholder: 'Add a game, e.g. Catan', 'aria-label': 'Game name' });
-    fill(wrap, h('h2', { style: 'margin-top:0' }, 'The Toy Box'),
-      h('p', { class: 'sub' }, 'Add games you’d like to play. Tick the ones you own and the ones you want to play. Once the date is set, one game owned by a guest who’s coming is picked at random, favoring the popular ones.'),
+    fill(wrap,
+      h('p', { class: 'sub' }, 'Add games you’d like to play, then tick the ones you own and how you feel about each. Once the date is set, one game owned by a guest who’s coming is picked at random, favoring popular ones and skipping games more guests don’t want than want.'),
       games.length ? games.map(g => h('div', { class: 'game' },
         h('strong', {}, g.title),
-        h('div', { class: 'sub' }, `Owned by: ${g.owners.join(', ') || 'no one yet'} · ${g.wants} want to play`),
-        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_owns, onchange: e => mark(g, e.target.checked, g.mine_wants) }), 'I own it'),
-        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_wants, onchange: e => mark(g, g.mine_owns, e.target.checked) }), 'I want to play this!'),
+        h('div', { class: 'sub' }, `Owned by: ${g.owners.join(', ') || 'no one yet'} · ${g.wants} want to play${g.avoids ? ' · ' + g.avoids + ' would rather not' : ''}`),
+        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_owns, onchange: e => mark(g, e.target.checked, g.mine_wants, g.mine_avoids) }), 'I own it'),
+        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_wants, onchange: e => mark(g, g.mine_owns, e.target.checked, e.target.checked ? false : g.mine_avoids) }), 'I want to play this!'),
+        h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: g.mine_avoids, onchange: e => mark(g, g.mine_owns, e.target.checked ? false : g.mine_wants, e.target.checked) }), 'I don’t want to play this'),
         g.can_delete && h('button', { class: 'link', type: 'button', onclick: () => { if (confirm('Remove ' + g.title + ' from The Toy Box?')) act(() => rpc('delete_game', { p_token: token, p_game_id: g.id })); } }, 'Remove')))
         : h('p', { class: 'sub' }, 'No games yet. Add the first one!'),
       h('div', { class: 'form' }, title,
@@ -256,58 +270,103 @@ function toyboxSection() {
   return wrap;
 }
 
-function renderVote(poll) {
-  const ans = {};
-  poll.options.forEach(o => { if (o.available !== null) ans[o.id] = o.available; });
-  const out = h('div');
-  const btn = h('button', { type: 'button', class: 'primary' }, poll.has_submitted ? 'Update my answers' : 'Submit my answers');
-  const sync = () => { btn.disabled = poll.options.some(o => !(o.id in ans)); };
-  const rows = poll.options.map(o => h('fieldset', {},
-    h('legend', {}, fmtDate(o.date)),
-    [['Yes', true], ['No', false]].map(([label, val]) => h('label', { class: 'opt' },
-      h('input', { type: 'radio', name: 'o' + o.id, checked: ans[o.id] === val, onchange: () => { ans[o.id] = val; sync(); } }),
-      label))));
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    try {
-      await rpc('submit_ballot', { p_token: token, p_answers: ans });
-      out.replaceChildren(note('Saved. You can change your answers until the date is chosen.', 'ok'));
-      btn.textContent = 'Update my answers';
-    } catch (e) { out.replaceChildren(note(msg(e), 'bad')); }
-    sync();
-  });
-  shell(greet(poll),
-    h('p', { class: 'sub' }, `Which Saturdays in ${fmtMonth(poll.event.month)} work for you? Please answer every date.`),
-    ...rows, btn, out, votesGrid(poll), volunteerSection(poll.signups, false), toyboxSection(), postsSection(poll.posts));
-  sync();
+const openState = {};   // which sections are expanded; survives re-renders
+const draft = {};       // unsaved vote answers; survive re-renders
+let flash = null;       // one-time confirmation message
+const wide = () => !!(window.matchMedia && window.matchMedia('(min-width: 900px)').matches);
+const fmtDeadline = ts => new Date(ts).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+
+function section(id, title, kids, openByDefault) {
+  const d = h('details', { class: 'sect' }, h('summary', {}, title), h('div', { class: 'body' }, kids));
+  if (id in openState ? openState[id] : openByDefault) d.open = true;
+  d.addEventListener('toggle', () => { openState[id] = d.open; });
+  return d;
 }
 
-function renderBoard(b) {
-  const ev = b.event, st = b.invitation_status, out = h('div');
-  const run = async (fn, args) => {
-    try { await rpc(fn, args); await load(); }
-    catch (e) { out.replaceChildren(note(msg(e), 'bad')); }
-  };
-  if (!ev) return shell(greet(b), note('The date hasn’t been set yet.'));
-  const items = [greet(b), h('div', { class: 'card' },
-    h('h2', { style: 'margin-top:0' }, fmtDate(ev.chosen_date)),
-    h('p', {}, fmtTime(ev.start_time), ev.start_time && ev.location && ' · ', ev.location && mapsLink(ev.location)),
-    ev.notes && h('p', { class: 'sub' }, ev.notes),
-    st === 'pending' && h('p', { class: 'sub' }, 'The address is shared with guests who reply yes.'),
-    st === 'yes' && !ev.location && h('p', { class: 'sub' }, 'The address will appear here once a host signs up.'))];
-  const tail = [peopleSection(b.people), h('details', {}, h('summary', {}, 'See everyone’s votes'), votesGrid(b)), toyboxSection(), postsSection(b.posts)];
+// The yes/no form for every date. Used in the summary until everything is answered, then under Voting details.
+function voteForm(d) {
+  const ans = {};
+  d.options.forEach(o => { if (o.available !== null) ans[o.id] = o.available; else if (o.id in draft) ans[o.id] = draft[o.id]; });
+  const out = h('div');
+  const btn = h('button', { type: 'button', class: 'primary' }, d.has_submitted ? 'Update my answers' : 'Submit my answers');
+  const sync = () => { btn.disabled = d.options.some(o => !(o.id in ans)); };
+  const rows = d.options.map(o => h('fieldset', {}, h('legend', {}, fmtDate(o.date)),
+    [['Yes', true], ['No', false]].map(([label, val]) => h('label', { class: 'opt' },
+      h('input', { type: 'radio', name: 'o' + o.id, checked: ans[o.id] === val, onchange: () => { ans[o.id] = val; draft[o.id] = val; sync(); } }), label))));
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try { await rpc('submit_ballot', { p_token: token, p_answers: ans }); flash = 'Saved. You can change your answers until the date is chosen.'; await load(); }
+    catch (e) { out.replaceChildren(note(msg(e), 'bad')); sync(); }
+  });
+  sync();
+  return [...rows, btn, out];
+}
 
-  if (st === null) return shell(...items, note('The date chosen didn’t work for you, so you weren’t included. If that’s changed, let the organizer know.'), ...tail);
-  if (st === 'declined') return shell(...items, note('You’ve told us you can’t make it.'),
-    h('p', {}, h('button', { class: 'primary', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'yes' }) }, 'Actually, I can come')), out, ...tail);
+// Top-left panel: status, key info, who's bringing what, and whatever the person still needs to answer
+function summaryPanel(d) {
+  const ev = d.event, st = d.invitation_status, kids = [];
+  if (d.mode === 'poll') {
+    const yes = o => d.people.filter(p => p.responded && p.answers && p.answers[o.id]).length;
+    const lead = [...d.options].sort((a, b) => yes(b) - yes(a) || a.date.localeCompare(b.date))[0];
+    const voted = d.people.filter(p => p.responded).length;
+    kids.push(h('span', { class: 'badge' }, 'Voting open'),
+      h('div', { class: 'big' }, `Planning ${fmtMonth(ev.month)}`),
+      h('p', {}, `Voting closes ${fmtDeadline(ev.poll_closes_at)}. ${voted} of ${d.people.length} have voted.` + (lead && yes(lead) ? ` Leading so far: ${fmtDate(lead.date)} (${yes(lead)} yes).` : '')));
+  } else {
+    const n = k => d.people.filter(p => p.invitation === k).length;
+    kids.push(h('span', { class: 'badge' }, 'Date set'),
+      h('div', { class: 'big' }, fmtDate(ev.chosen_date) + (ev.start_time ? ' at ' + fmtTime(ev.start_time) : '')),
+      ev.location && h('p', {}, 'Where: ', mapsLink(ev.location)),
+      st === 'pending' && h('p', { class: 'sub' }, 'The address is shared with guests who reply yes.'),
+      st === 'yes' && !ev.location && h('p', { class: 'sub' }, 'The address will appear here once a host signs up.'),
+      ev.notes && h('p', { class: 'sub' }, ev.notes),
+      h('p', {}, `${n('yes')} coming · ${n('pending')} haven’t replied`));
+  }
+  kids.push(h('h3', {}, 'Who’s bringing what'), h('ul', { class: 'list' }, Object.entries(ROLES).map(([r, label]) => {
+    const who = d.signups.filter(s => s.role === r);
+    return h('li', {}, h('strong', {}, label + ': '),
+      who.length ? who.map(s => h('span', { class: 'tag' }, s.name + (s.details ? ' (' + s.details + ')' : ''))) : h('span', { class: 'sub' }, 'Still needed'));
+  })));
 
-  const rsvp = st === 'pending' ? h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Are you coming?'),
-    h('p', { class: 'sub' }, 'Volunteering for something below counts as a yes.'),
-    h('button', { class: 'primary', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'yes' }) }, 'Yes, I’m in'), ' ',
-    h('button', { type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'declined' }) }, 'I can’t make it')) : null;
-  shell(...items, rsvp, volunteerSection(b.signups, true), out,
-    st === 'yes' && h('p', {}, h('button', { class: 'link', type: 'button', onclick: () => run('set_invitation_status', { p_token: token, p_status: 'declined' }) }, 'I can’t make it')),
-    ...tail);
+  if (d.mode === 'poll') {
+    if (d.options.some(o => o.available === null)) kids.push(h('h3', {}, 'Which Saturdays work for you?'), ...voteForm(d));
+    else kids.push(note('You’ve answered every date. You can change your answers under Voting details.', 'ok'));
+  } else {
+    const out = h('div');
+    const reply = (status, okMsg) => async () => {
+      try { await rpc('set_invitation_status', { p_token: token, p_status: status }); flash = okMsg; await load(); }
+      catch (e) { out.replaceChildren(note(msg(e), 'bad')); }
+    };
+    if (st == null) kids.push(note('The date chosen didn’t work for you, so you weren’t included. If that’s changed, let the organizer know.'));
+    else if (st === 'declined') kids.push(note('You’ve told us you can’t make it.'), h('p', {}, h('button', { class: 'primary', type: 'button', onclick: reply('yes', 'Great, you’re back on the list.') }, 'Actually, I can come')));
+    else if (st === 'pending') kids.push(h('h3', {}, 'Are you coming?'), h('p', { class: 'sub' }, 'Volunteering for something counts as a yes.'),
+      h('button', { class: 'primary', type: 'button', onclick: reply('yes', 'Great, you’re in!') }, 'Yes, I’m in'), ' ',
+      h('button', { type: 'button', onclick: reply('declined', 'Thanks for letting us know.') }, 'I can’t make it'));
+    else kids.push(h('p', {}, h('button', { class: 'link', type: 'button', onclick: reply('declined', 'Thanks for letting us know.') }, 'I can’t make it')));
+    kids.push(out);
+  }
+  return h('div', { class: 'card' }, kids);
+}
+
+function votingDetails(d) {
+  if (d.mode === 'board') return [peopleSection(d.people), votesGrid(d)];
+  const answeredAll = !d.options.some(o => o.available === null);
+  return [answeredAll && h('h3', {}, 'Your answers'), ...(answeredAll ? voteForm(d) : []), votesGrid(d)];
+}
+
+function renderPage(d) {
+  const flashNode = flash ? note(flash, 'ok') : null;
+  flash = null;
+  const main = d.mode === 'none' ? h('div', { class: 'card' }, note('There’s nothing to vote on right now. Check back soon.')) : summaryPanel(d);
+  const parts = [greet(d), flashNode,
+    h('div', { class: 'top' }, h('div', {}, main), h('aside', { class: 'side' }, section('toybox', 'The Toy Box', [toyboxSection()], wide())))];
+  if (d.mode !== 'none') {
+    if (d.mode === 'poll' || ['yes', 'pending'].includes(d.invitation_status))
+      parts.push(section('volunteer', `Volunteer (${d.signups.length} so far)`, [volunteerSection(d.signups, d.mode === 'poll')], true));
+    parts.push(section('voting', 'Voting details', votingDetails(d), false),
+      section('board', `Message board (${d.posts.length})`, [postsSection(d.posts)], false));
+  }
+  shell(...parts);
 }
 
 load();

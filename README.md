@@ -43,7 +43,9 @@ See `.env.example`. Never commit real values.
 
 A shared game list on every attendee page. Anyone can add a game (the person who adds it automatically ticks "I want to play this!"), tick "I own it", and tick "I want to play this!". Only the person who added a game can remove it; the organizer can remove any game from the admin page, and can pick or re-pick a game by hand.
 
-Pick rules: candidates are games owned by at least one confirmed guest (status yes), not already used for this event. Choice is weighted random, with weight = 1 + the number of confirmed guests who want to play it. The pick becomes a Games entry for an owner, the host if the host owns it, otherwise a random owner among confirmed guests.
+People can also tick "I don't want to play this" (it can't be combined with "I want to play this!").
+
+Pick rules: candidates are games owned by at least one confirmed guest (status yes), not already used for this event. Choice is weighted random, with weight = 1 + (confirmed guests who want it) - (confirmed guests who don't). A game whose weight is zero or less, meaning more confirmed guests don't want it than want it, is skipped. The pick becomes a Games entry for an owner, the host if the host owns it, otherwise a random owner among confirmed guests.
 
 ## The scheduled job
 
